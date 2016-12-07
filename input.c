@@ -1968,23 +1968,22 @@ base64_decode(const char *src, size_t srclength, uint8_t *dest, size_t destlengt
 }
 
 /* OSC52 modes: 
- *  - In 'manual' mode (the default), tmux attempts to mimic the 
- *    full XTerm behaviour. The target list provided
- *    in the OSC52 request is fully interpreted as follow:
- *    'c', 'p', '0' , ..., '7' are respectively associated to 
- *    the named buffers "CLIPBOARD", "PRIMARY", "CUT_BUFFER0", 
- *    ... , "CUT_BUFFER7" while the target 's' will mimic the 
- *    default behaviour of the save-buffer and paste-buffer 
- *    commands (so writing in a new unnamed buffer and reading 
- *    from the last created buffer).
  * 
- *  - In 'auto' mode, the target list specified by the OSC52 
- *    request is ignored and "s" is used intead. 
+ *  - In 'manual' mode (the default), tmux attempts to mimic the 
+ *    XTerm behaviour. The targets 'c', 'p', '0' , ..., '7' 
+ *    are respectively associated to the named buffers "CLIPBOARD", 
+ *    "PRIMARY", "CUT_BUFFER0", ... , "CUT_BUFFER7".  
+ *    The target 's' write the selection to a new automatic buffer
+ *    and reads it from the most recent buffer (this is the default 
+ *    behaviour associated to the '[' and ']' key bindings).
+ * 
+ *  - In 'auto' mode, the target list specified by OSC52 
+ *    requests is ignored and "s" is used instead. 
  *     
- *  - in 'clipboard' mode, the target list specified by the OSC52 
- *    request is ignored and "c" is used intead. 
+ *  - In 'clipboard' mode, the target list specified by OSC52 
+ *    requests is ignored and "c" is used instead. 
  *
- *  - in 'none' mode, setting the selection has no effects and 
+ *  - In 'none' mode, setting the selection has no effects and 
  *    getting the selection will always return an empty string.
  * 
  *  - The 'scp' mode is similar to the 'manual' mode except that 

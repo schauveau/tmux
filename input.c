@@ -22,6 +22,9 @@
 #include <string.h>
 #include <time.h>
 
+/* resolv.h for b64_ntop */
+#include <resolv.h> 
+
 #include "tmux.h"
 
 /*
@@ -1815,6 +1818,351 @@ input_dcs_dispatch(struct input_ctx *ictx)
 	return (0);
 }
 
+
+typedef enum { 
+  OSC52_UNKNOWN = -1,
+  OSC52_SELECT  =  0,
+  OSC52_PRIMARY,
+  OSC52_CLIPBOARD, 
+  OSC52_CUT_BUFFER0,
+  OSC52_CUT_BUFFER1,
+  OSC52_CUT_BUFFER2,
+  OSC52_CUT_BUFFER3,
+  OSC52_CUT_BUFFER4,
+  OSC52_CUT_BUFFER5,
+  OSC52_CUT_BUFFER6,
+  OSC52_CUT_BUFFER7,  
+  OSC52_target_count 
+} osc52_target_t ;
+
+typedef struct {
+  char c1 ;         /* First identifcation character */
+  char c2 ;         /* Second identication character (or same than c1 if none) */
+  int  resilient ;  /* indicate if the buffer is assumed to be empty when absent */
+  const char * name ; /* name of the associated tmux buffer */
+} osc52_target_info_t ;
+
+/* Describe all possible OSC52 targets. 
+ * The order and ranks in that array should match the values in osc52_target_t enum.
+ */
+const osc52_target_info_t osc52_target_info[OSC52_target_count] = 
+  {
+    { 's', 'S', 0, "SELECT"      },
+    { 'p', 'P', 0, "PRIMARY"     },
+    { 'c', 'C', 0, "CLIPBOARD"   },
+    { '0', '0', 1, "CUT_BUFFER0" },
+    { '1', '1', 1, "CUT_BUFFER1" },
+    { '2', '2', 1, "CUT_BUFFER2" },
+    { '3', '3', 1, "CUT_BUFFER3" },
+    { '4', '4', 1, "CUT_BUFFER4" },
+    { '5', '5', 1, "CUT_BUFFER5" },
+    { '6', '6', 1, "CUT_BUFFER6" },
+    { '7', '7', 1, "CUT_BUFFER7" }  
+  } ;
+
+/* Convert a target character used in OSC52 into an osc52_target_t enum value.
+ * Return OSC52_UNKNOWN if character is unknown.
+ * Remark: character 's' should be handled separately.
+ */
+static osc52_target_t 
+osc52_char_to_target( char c )
+{
+  int i ; 
+  for (i=0;i<OSC52_target_count;i++) {
+    if (osc52_target_info[i].c1 == c || osc52_target_info[i].c2 == c) 
+      return (osc52_target_t) i ;
+  }
+  return OSC52_UNKNOWN ;
+}
+
+
+///* Compute the size required to base64 decode the input_size characters at src */
+static size_t 
+base64_decode_size(const char *src, size_t input_size )
+{ 
+  size_t i ;
+  size_t count = 0  ;
+  size_t size   ;
+  
+  /* Count the significant characters.
+   * Be friendly and ignore all other characters (Xterm does that too)
+   */
+  for ( i=0; i<input_size ; i++) {
+    char c = src[i] ;
+    if (  (c>='A' && c<='Z') || (c>='a' && c<='z') 
+          ||  (c>='0' && c<='9') || (c=='+') || c=='/' )
+      count++ ;      
+  }
+  
+  /* 3 output bytes per group of 4 input characters */
+  size = ( count / 4 ) * 3 ; 
+  
+  /* And each of the remaining input characters provides 6 bytes 
+   *   + 0 character  = 0  bits = +0 bytes 
+   *   + 1 character  = 6  bits = +0 bytes 
+   *   + 2 characters = 12 bits = +1 bytes 
+   *   + 3 characters = 18 bits = +2 bytes 
+   */  
+  size += ( (count % 4) * 6) / 8  ; 
+
+  return size ; 
+
+}
+
+/* Base64 decode srclength input characters at src.
+ * 
+ * The result is stored in the destlength bytes starting at dest.
+ * 
+ * Return the number of decoded characters.
+ */
+static size_t 
+base64_decode(const char *src, size_t srclength, uint8_t *dest, size_t destlength ) {
+
+  size_t off = 0 ;
+  size_t i ;
+
+  unsigned int state ;  
+  int sig  ;  /* Will hold the number of significant bits in state */
+
+  state = 0 ;
+  sig   = 0 ;
+  for (i=0 ; i<srclength ;i++) {
+    char c = *src++ ;
+    unsigned int val;    
+    
+    if (c>='A' && c<='Z') 
+      val =  c-'A'+0 ;
+    else if ( c>='a' && c<='z')  
+      val =  c-'a'+26 ;
+    else if ( c>='0' && c<='9')  
+      val =  c-'0'+52 ;
+    else if (c=='+')
+      val = 62 ;
+    else if (c=='/')
+      val = 63 ;
+    else 
+      continue ; /* Be user friendly. ignore all unexpected characters */
+    
+    state <<= 6 ;
+    state |= val ;
+    sig += 6 ;
+
+    /* Once we have 8bits, consume them and add an output byte */ 
+    if (sig>=8) {
+
+      if (off>=destlength) 
+        break ;
+
+      dest[off] = (uint8_t) ( state >> (sig-8) ) ;
+      off++ ;
+      sig -= 8 ;
+
+    }        
+  }
+  
+  return off ;
+
+}
+
+
+/* Process a client OSC52 sequence to manipulate the buffers  
+ *  OSC 52 ; p1 ; p2  
+ *    
+ * Each character in p1 describes a target buffer (see osc52_target_info).
+ *
+ * if p2 is empty then the specified buffer (or buffers) is cleared 
+ * else if p2 is '?'   then reply with the content of the 1st of the specified buffer that currently exit 
+ *       ==> Reminder: PRIMARY and CLIPBOARD may not exist but the CUT_BUFFER are always present.
+ * else p2 shall contain the base64 encode of the text to be placed in those buffers
+ *
+ */
+static void 
+process_osc52(struct input_ctx *ictx, u_char *args)
+{
+  u_char *sep ;
+  const u_char *p1 ;
+  const u_char *p2 ;
+
+  log_debug("%s", __func__);
+
+  /* Find the second ';' in 'args' and split it to create p1 and p2 */
+  sep = (u_char*) strchr( (char*)args,';') ;
+  if (!sep) {        
+    return ;  
+  }
+  *sep = '\0' ;
+  p1 = args  ;
+  p2 = sep+1 ;
+  
+
+  if (strcmp(p2,"?")==0) {
+
+    // This is a get-selection request.
+
+    const char * bufname ;
+    struct paste_buffer * pb ; 
+    const char * p1_save = p1 ; 
+
+    /* The answer must use the same OSC termination sequence that the query. 
+     * Two cases must be considered '\a' or '\e\\'.
+     *
+     * Fortunately, that information can be retreived from 
+     *    ictx->ch
+     *
+     * Remark: Supporting \e\\ is important because some clients
+     *         have issues with \a.
+     *         A typical example is emacs which also use \a (i.e. Control-G) 
+     *         to interrupt command.       
+     *
+     */
+    const char * tail = (ictx->ch=='\a') ? "\a" : "\e\\" ;
+    
+    if (p1==NULL) 
+      p1 = "s0" ;
+
+    /* Find the paste-buffer corresponding to the first usable target */
+    pb=NULL ;
+    for ( ; *p1!='\0' ; p1++ )   {
+      osc52_target_t tgt = osc52_char_to_target(*p1) ; 
+      if (tgt==OSC52_UNKNOWN) 
+        continue ; 
+
+      if (tgt==OSC52_SELECT) {
+        /* current strategy for the 'SELECT' target is to use the TOP buffer */
+        pb = paste_get_top(&bufname) ;  
+        break ;
+      } else {       
+        /* CLIPBARD, PRIMARY or one of the CUT_BUFFERs */
+        bufname = osc52_target_info[tgt].name ;
+        pb = paste_get_name(bufname) ;  
+        /* if not present, resilient targets are assumed to be empty 
+         * while non resilient targets are simply ignored
+         */
+        if ( pb == NULL && osc52_target_info[tgt].resilient ) {
+          break ;
+        }
+      }    
+    }
+
+    /*    pb = paste_get_top(&bufname) ; */
+
+    if (pb==NULL) 
+      {        
+        input_reply(ictx, "\e]52;%s;%s",p1_save,tail);
+      }
+    else
+      {
+        size_t bufsize ;
+        const char * bufdata = paste_buffer_data(pb, &bufsize);
+          
+        size_t b64_size = 4 * ((bufsize + 2) / 3) + 1; /* storage size for base64 */
+        char * b64_data = xmalloc(b64_size);
+        
+        b64_ntop(bufdata, bufsize, b64_data, b64_size);
+        
+        input_reply(ictx, "\e]52;%s;%s%s",p1_save,b64_data,tail);
+        
+        free(b64_data);
+      }
+    
+  } else {
+
+    // This is a set-selection request.
+
+    osc52_target_t targets[OSC52_target_count+1] ;     
+    int            present[OSC52_target_count] = {0} ; 
+    int            nt = 0 ;
+    int            i ;
+    size_t         size , size2 ;
+    char *         data ;
+
+    log_debug("%s: '%s' '%s'", __func__, p1, p2);
+
+    if ( *p1=='\0' )
+      p1 = "s0" ;  /* the default target specification */
+
+    /* Build an ordered list of targets without duplicates */
+    for ( ; *p1 != '\0' ; p1++ )  {     
+      osc52_target_t tgt = osc52_char_to_target(*p1) ;
+      /* Ignore unknown characters */
+      if (tgt==OSC52_UNKNOWN)
+        continue ;    
+      /* Ignore duplicate targets */
+      if (present[tgt]) 
+        continue ; 
+      /* add to list */
+      present[tgt]  = 1 ; 
+      targets[nt++] = tgt ;
+    }
+
+    size = base64_decode_size(p2,strlen(p2)) ;
+    data = xmalloc(size+1) ;
+
+    size2 = base64_decode(p2, strlen(p2), data, size ) ;    
+
+    if (size2!=size) {
+      /* Should never happen. base64_decode() should always match the size provided by base64_decode_size()  */
+      log_debug("%s: Unexpected errror during base64 decoding (%d != %d) \n", __func__ , (int)size, (int)size2);
+      free(data) ;
+    }
+
+    data[size] = '\0' ;
+
+    /* If set-clipboard option is enabled then broadcast the provided selection to the terminal. 
+     * TODO: Do we want to do that systematically or only for some targets and if so, which ones?
+     *       For now, let's do it if either S, P or C is requested.
+     *       That could become configurable.
+     */
+    if ( options_get_number(global_options, "set-clipboard")) {
+      if ( present[OSC52_SELECT] || present[OSC52_CLIPBOARD] || present[OSC52_PRIMARY] ) {
+        struct screen_write_ctx ctx;
+        screen_write_start(&ctx, ictx->wp, NULL);
+        screen_write_setselection(&ctx, data, size);
+        screen_write_stop(&ctx);
+      }
+    }
+
+
+    /* Process the list of targets in reverse order. 
+     * The reason is that we may update multiple buffers and, at the end, we want the
+     * first one on top of the buffer list.
+     */
+    
+    for (i=nt-1 ; i>=0 ; i--) 
+    {
+      osc52_target_t  tgt= targets[i] ; 
+      const osc52_target_info_t * tinfo = &osc52_target_info[tgt] ;
+
+      /* SELECT will be handled later as an automatic buffer that will end up on top */       
+      if (tgt==OSC52_SELECT) 
+        continue ; 
+
+      if (size==0) {
+        /* delete the buffer when given empty data */ 
+        struct paste_buffer *pb = paste_get_name( tinfo->name ) ;
+        if (pb) 
+          paste_free(pb) ;           
+      } else {        
+        /* Each paste buffer must own it data so make a copy*/
+        char * pb_data =  (char*) xmalloc(size) ; 
+        memcpy(pb_data,data,size) ;        
+        paste_set( pb_data, size, tinfo->name , NULL ) ;   
+      }     
+    }
+
+    /* Handle SELECT as an automatic buffer */
+    if ( present[OSC52_SELECT] ) {  
+      paste_add(data,size) ;        
+    } else {
+      free(data) ;
+    }
+
+  }
+
+}
+
+
+
 /* OSC string started. */
 static void
 input_enter_osc(struct input_ctx *ictx)
@@ -1858,6 +2206,9 @@ input_exit_osc(struct input_ctx *ictx)
 		if (*p == '\0') /* no arguments allowed */
 			screen_set_cursor_colour(ictx->ctx.s, "");
 		break;
+        case 52:
+                process_osc52(ictx, p) ;
+                break ;
 	default:
 		log_debug("%s: unknown '%u'", __func__, option);
 		break;

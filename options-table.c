@@ -53,6 +53,9 @@ static const char *options_table_bell_action_list[] = {
 static const char *options_table_pane_status_list[] = {
 	"off", "top", "bottom", NULL
 };
+static const char *options_osc_selection_mode_list[] = {
+        "manual", "auto", "clipboard", "none", "scp", NULL
+};  
 
 /* Server options. */
 const struct options_table_entry options_table[] = {
@@ -707,6 +710,13 @@ const struct options_table_entry options_table[] = {
 	  .type = OPTIONS_TABLE_STYLE,
 	  .scope = OPTIONS_TABLE_WINDOW,
 	  .default_str = "default"
+	},
+
+	{ .name = "osc-selection-mode",
+	  .type = OPTIONS_TABLE_CHOICE,
+	  .scope = OPTIONS_TABLE_SERVER,
+	  .choices = options_osc_selection_mode_list,
+	  .default_num = 0
 	},
 
 	{ .name = "remain-on-exit",

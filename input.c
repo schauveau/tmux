@@ -1836,10 +1836,10 @@ typedef enum {
 } osc52_target_t ;
 
 typedef struct {
-  char c1 ;         /* First identifcation character */
-  char c2 ;         /* Second identication character (or same than c1 if none) */
-  int  resilient ;  /* indicate if the buffer is assumed to be empty when absent */
-  const char * name ; /* name of the associated tmux buffer */
+  char c1 ;            /* First identifcation character */
+  char c2 ;            /* Second identication character (or same than c1 if none) */
+  int  is_cut_buffer ; 
+  const char * name ;  /* name of the associated tmux buffer */
 } osc52_target_info_t ;
 
 /* Describe all possible OSC52 targets. 
@@ -1859,6 +1859,9 @@ const osc52_target_info_t osc52_target_info[OSC52_target_count] =
     { '6', '6', 1, "CUT_BUFFER6" },
     { '7', '7', 1, "CUT_BUFFER7" }  
   } ;
+
+
+#define IS_CUT_BUFFER(tgt) ( OSC52_CUT_BUFFER0<=(tgt) && (tgt)<=OSC52_CUT_BUFFER7 ) ;
 
 /* Convert a target character used in OSC52 into an osc52_target_t enum value.
  * Return OSC52_UNKNOWN if character is unknown.
@@ -1964,6 +1967,46 @@ base64_decode(const char *src, size_t srclength, uint8_t *dest, size_t destlengt
 
 }
 
+/* OSC52 modes: 
+ *  - In 'manual' mode (the default), tmux attempts to mimic the 
+ *    full XTerm behaviour. The target list provided
+ *    in the OSC52 request is fully interpreted as follow:
+ *    'c', 'p', '0' , ..., '7' are respectively associated to 
+ *    the named buffers "CLIPBOARD", "PRIMARY", "CUT_BUFFER0", 
+ *    ... , "CUT_BUFFER7" while the target 's' will mimic the 
+ *    default behaviour of the save-buffer and paste-buffer 
+ *    commands (so writing in a new unnamed buffer and reading 
+ *    from the last created buffer).
+ * 
+ *  - In 'auto' mode, the target list specified by the OSC52 
+ *    request is ignored and "s" is used intead. 
+ *     
+ *  - in 'clipboard' mode, the target list specified by the OSC52 
+ *    request is ignored and "c" is used intead. 
+ *
+ *  - in 'none' mode, setting the selection has no effects and 
+ *    getting the selection will always return an empty string.
+ * 
+ *  - The 'scp' mode is similar to the 'manual' mode except that 
+ *    the CUT_BUFFER targets are ignored. That can save  
+ *    memory for applications using the recommanded target 
+ *    list "s0".
+ * 
+ */
+
+
+
+/* Values for option osc-selection-mode. 
+ * See options_osc_selection_mode_list in options-table.c
+ */
+enum {
+   OSC52_MODE_MANUAL    = 0,
+   OSC52_MODE_AUTO      = 1,
+   OSC52_MODE_CLIPBOARD = 2,
+   OSC52_MODE_NONE      = 3,
+   OSC52_MODE_SCP       = 4
+} ;
+  
 
 /* Process a client OSC52 sequence to manipulate the buffers  
  *  OSC 52 ; p1 ; p2  
@@ -1982,9 +2025,12 @@ process_osc52(struct input_ctx *ictx, u_char *args)
   u_char *sep ;
   const u_char *p1 ;
   const u_char *p2 ;
-
+  int mode ;
+  
   log_debug("%s", __func__);
 
+  mode = options_get_number(global_options, "osc-selection-mode");
+  
   /* Find the second ';' in 'args' and split it to create p1 and p2 */
   sep = (u_char*) strchr( (char*)args,';') ;
   if (!sep) {        
@@ -2002,7 +2048,32 @@ process_osc52(struct input_ctx *ictx, u_char *args)
     const char * bufname ;
     struct paste_buffer * pb ; 
     const char * p1_save = p1 ; 
-
+    const char * tail ;
+    
+    switch(mode) {
+    case OSC52_MODE_MANUAL:
+    case OSC52_MODE_SCP:
+      /* Use the provided list of target buffers or "s" if none */
+      if (*p1=='\0') 
+        p1 = "s" ;
+      break ;
+    case OSC52_MODE_AUTO:
+      /* Ignore user target list and use an automatic buffer instead */
+      p1 = "s" ;
+      break ;
+    case OSC52_MODE_CLIPBOARD:
+      /* Ignore user target list and use CLIPBOARD buffer instead */
+      p1 = "c" ;
+      break ;
+    case OSC52_MODE_NONE:
+      /* No valid target. Will reply with an empty value */
+      p1 = "" ;
+    default:
+      /* Should not happen */
+      p1 = "s" ; 
+    }
+    
+    
     /* The answer must use the same OSC termination sequence that the query. 
      * Two cases must be considered '\a' or '\e\\'.
      *
@@ -2015,20 +2086,24 @@ process_osc52(struct input_ctx *ictx, u_char *args)
      *         to interrupt command.       
      *
      */
-    const char * tail = (ictx->ch=='\a') ? "\a" : "\e\\" ;
-    
-    if (p1==NULL) 
-      p1 = "s0" ;
 
+    tail = (ictx->ch=='\a') ? "\a" : "\e\\" ;
+    
     /* Find the paste-buffer corresponding to the first usable target */
     pb=NULL ;
     for ( ; *p1!='\0' ; p1++ )   {
       osc52_target_t tgt = osc52_char_to_target(*p1) ; 
+
       if (tgt==OSC52_UNKNOWN) 
         continue ; 
 
+      if (mode==OSC52_MODE_SCP && osc52_target_info[tgt].is_cut_buffer )
+        continue ;     
+      
       if (tgt==OSC52_SELECT) {
-        /* current strategy for the 'SELECT' target is to use the TOP buffer */
+        /* Current strategy for the 'SELECT' target is to get the 
+         * selection from the more recent buffer (so on top).
+         */
         pb = paste_get_top(&bufname) ;  
         break ;
       } else {       
@@ -2038,16 +2113,15 @@ process_osc52(struct input_ctx *ictx, u_char *args)
         /* if not present, resilient targets are assumed to be empty 
          * while non resilient targets are simply ignored
          */
-        if ( pb == NULL && osc52_target_info[tgt].resilient ) {
+        if ( pb == NULL && osc52_target_info[tgt].is_cut_buffer ) {
           break ;
         }
       }    
     }
 
-    /*    pb = paste_get_top(&bufname) ; */
-
     if (pb==NULL) 
-      {        
+      {
+        /* No buffer so send an empty answer */
         input_reply(ictx, "\e]52;%s;%s",p1_save,tail);
       }
     else
@@ -2078,15 +2152,38 @@ process_osc52(struct input_ctx *ictx, u_char *args)
 
     log_debug("%s: '%s' '%s'", __func__, p1, p2);
 
-    if ( *p1=='\0' )
-      p1 = "s0" ;  /* the default target specification */
+    switch(mode) {
+    case OSC52_MODE_MANUAL:
+      /* Use the provided list of target buffers or "s" if none */
+      if (*p1=='\0') 
+        p1 = "s" ;
+      break ;
+    case OSC52_MODE_AUTO:
+      /* Ignore user target list and use an automatic buffer instead */
+      p1 = "s" ;
+      break ;
+    case OSC52_MODE_CLIPBOARD:
+      /* Ignore user target list and use CLIPBOARD buffer instead */
+      p1 = "c" ;
+      break ;
+    case OSC52_MODE_NONE:
+      /* No valid target. The provided string will be discarded */
+      p1 = "" ;
+      break ;
+    default:
+      /* Should not happen */
+      p1 = "s" ; 
+    }    
 
     /* Build an ordered list of targets without duplicates */
     for ( ; *p1 != '\0' ; p1++ )  {     
       osc52_target_t tgt = osc52_char_to_target(*p1) ;
       /* Ignore unknown characters */
       if (tgt==OSC52_UNKNOWN)
-        continue ;    
+        continue ;
+      /* Ignore all CUT_BUFFERS if in SCP mode */
+      if (mode==OSC52_MODE_SCP && osc52_target_info[tgt].is_cut_buffer )
+        continue ;  
       /* Ignore duplicate targets */
       if (present[tgt]) 
         continue ; 

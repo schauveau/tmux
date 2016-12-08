@@ -54,7 +54,7 @@ static const char *options_table_pane_status_list[] = {
 	"off", "top", "bottom", NULL
 };
 static const char *options_osc_selection_mode_list[] = {
-        "manual", "select", "clipboard", "none", "scp", NULL
+  "manual", "targets", "select", "clipboard", "none", "scp", NULL
 };  
 
 /* Server options. */
@@ -641,6 +641,12 @@ const struct options_table_entry options_table[] = {
 	  .default_num = 0
 	},
 
+	{ .name = "osc-selection-targets",
+	  .type = OPTIONS_TABLE_STRING,
+	  .scope = OPTIONS_TABLE_WINDOW,
+	  .default_str = "s"
+	},
+
 	{ .name = "osc-selection-get",
 	  .type = OPTIONS_TABLE_FLAG,
 	  .scope = OPTIONS_TABLE_WINDOW,
@@ -648,6 +654,12 @@ const struct options_table_entry options_table[] = {
 	},
 
 	{ .name = "osc-selection-set",
+	  .type = OPTIONS_TABLE_FLAG,
+	  .scope = OPTIONS_TABLE_WINDOW,
+	  .default_num = 0
+	},
+
+	{ .name = "osc-selection-cut-buffers",
 	  .type = OPTIONS_TABLE_FLAG,
 	  .scope = OPTIONS_TABLE_WINDOW,
 	  .default_num = 0

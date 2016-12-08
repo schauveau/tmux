@@ -38,7 +38,7 @@ stty -F "$TTY" -echo -icanon
 
 targets=`echo -n "$1" | sed 's/[^scp01234567]//g'`
 
-printf '\e]52;%s;?\a' "$targets"
+printf '\e]52;%s;?\a' "$targets" > $TTY
 
 read -d $'\a' MSG < $TTY
 

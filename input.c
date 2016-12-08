@@ -1996,8 +1996,10 @@ process_osc52(struct input_ctx *ictx, u_char *args)
   const u_char *p2 ;
   int mode ;
   int ignore_cut_buffers ;
-  int get ;  
-
+  int get_request ;  
+  enum { GET_REQUEST , SET_REQUEST } request ;
+  int allow_request ;
+  
   log_debug("%s", __func__);
 
   ignore_cut_buffers = ! options_get_number(ictx->wp->window->options, "osc-selection-cut-buffers") ;
@@ -2010,15 +2012,23 @@ process_osc52(struct input_ctx *ictx, u_char *args)
   *sep = '\0' ;
   p1 = args  ;
   p2 = sep+1 ;
-  
-  get_request = (strcmp(p2,"?")==0) ;  /* 1 = a 'get' request  , 0 = a 'set' request   */
+
+  if ( strcmp(p2,"?")==0 ) {
+    request = GET_REQUEST ;
+    allow_request = options_get_number(ictx->wp->window->options, "osc-selection-get" ) ;
+  } else {
+    request = SET_REQUEST ;
+    allow_request = options_get_number(ictx->wp->window->options, "osc-selection-set" ) ;
+  }
    
-  if ( options_get_number(ictx->wp->window->options, get_request ? "osc-selection-get" : "osc-selection-set" ) ) {
+  if ( allow_request ) {
     mode = options_get_number(ictx->wp->window->options, "osc-selection-mode"); 
-  } else 
+  } else {
+    /* Don't stop yet. A reply is needed in case of a GET_REQUEST */
     mode = OSC52_MODE_NONE ; 
-  }  
-  
+  }
+
+  /* Adjust the list of targets according to options */ 
   switch(mode) {
   case OSC52_MODE_MANUAL:
     /* Use the provided list of target buffers or "s" if none */
@@ -2027,14 +2037,15 @@ process_osc52(struct input_ctx *ictx, u_char *args)
     break ;
   case OSC52_MODE_TARGETS:      
     p1 = options_get_string(ictx->wp->window->options, "osc-selection-targets") ;
-    break ; 
+    break ;
+  case OSC52_MODE_NONE:
   default:
     p1 = "" ;
   }
 
-  if ( get_request ) {
+  if ( request == GET_REQUEST ) {
 
-    /* This is a get selection request. */
+    /* GET_REQUEST */
 
     const char * bufname ;
     struct paste_buffer * pb ; 
@@ -2055,7 +2066,7 @@ process_osc52(struct input_ctx *ictx, u_char *args)
      */
 
     tail = (ictx->ch=='\a') ? "\a" : "\e\\" ;
-    
+    ignore_cut_buffers=111 ;
     /* Find the paste-buffer corresponding to the first usable target */
     pb=NULL ;
     for ( ; *p1!='\0' ; p1++ )   {
@@ -2108,7 +2119,7 @@ process_osc52(struct input_ctx *ictx, u_char *args)
     
   } else {
 
-    /* This is a set selection request */
+    /* SET_REQUEST */
 
     osc52_target_t targets[OSC52_target_count+1] ;     
     int            present[OSC52_target_count] = {0} ; 
@@ -2116,40 +2127,16 @@ process_osc52(struct input_ctx *ictx, u_char *args)
     int            i ;
     size_t         size , size2 ;
     char *         data ;    
-    int            opt_osc_selection_set = options_get_number(ictx->wp->window->options, "osc-selection-set") ;
     int            opt_osc_set_clipboard = options_get_number(ictx->wp->window->options, "osc-set-clipboard") ;
     int            opt_set_clipboard     = options_get_number(global_options, "set-clipboard") ;
-
-      
-    if (! opt_osc_selection_set ) {
-      mode = OSC52_MODE_NONE ; 
-    }
-
-    switch(mode) {
-    case OSC52_MODE_MANUAL:
-      /* Use the provided list of target buffers or "s" if none */
-      if (*p1=='\0') 
-        p1 = "s" ;
-      break ;
-    case OSC52_MODE_TARGETS:      
-      p1 = options_get_string(ictx->wp->window->options, "osc-selection-targets") ;
-      break ; 
-    case OSC52_MODE_NONE:
-      /* No valid target. The provided string will be discarded */
-      p1 = "" ;
-      break ;
-    default:
-      /* Should not happen */
-      p1 = "" ; 
-    }    
-
+     
 
     /* Build an ordered list of targets without duplicates */
     for ( ; *p1 != '\0' ; p1++ )  {     
       osc52_target_t tgt = osc52_char_to_target(*p1) ;
       if (tgt==OSC52_UNKNOWN)
         continue ;
-      if (osc52_target_info[tgt].is_cut_buffer && && ignore_cut_buffers )
+      if (osc52_target_info[tgt].is_cut_buffer && ignore_cut_buffers )
         continue ;  
       /* Ignore duplicate targets */
       if (present[tgt]) 
@@ -2174,7 +2161,7 @@ process_osc52(struct input_ctx *ictx, u_char *args)
     data[size] = '\0' ;
 
     /* Send to the terminal clipboard if all conditions are met */
-    if ( opt_osc_selection_set ) {
+    if ( allow_request ) {
       if ( opt_osc_set_clipboard ) {
         if ( opt_set_clipboard ) {
           struct screen_write_ctx ctx;
@@ -2184,7 +2171,7 @@ process_osc52(struct input_ctx *ictx, u_char *args)
         }
       }
     }
-
+ 
     /* Process the list of targets in reverse order. 
      * The reason is that we may update multiple buffers and, at the end, we want the
      * first one on top of the buffer list.

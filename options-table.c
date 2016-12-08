@@ -54,7 +54,7 @@ static const char *options_table_pane_status_list[] = {
 	"off", "top", "bottom", NULL
 };
 static const char *options_osc_selection_mode_list[] = {
-        "manual", "auto", "clipboard", "none", "scp", NULL
+        "manual", "select", "clipboard", "none", "scp", NULL
 };  
 
 /* Server options. */
@@ -634,6 +634,31 @@ const struct options_table_entry options_table[] = {
 	  .default_num = 0
 	},
 
+	{ .name = "osc-selection-mode",
+	  .type = OPTIONS_TABLE_CHOICE,
+	  .scope = OPTIONS_TABLE_WINDOW,
+	  .choices = options_osc_selection_mode_list,
+	  .default_num = 0
+	},
+
+	{ .name = "osc-selection-get",
+	  .type = OPTIONS_TABLE_FLAG,
+	  .scope = OPTIONS_TABLE_WINDOW,
+	  .default_num = 0
+	},
+
+	{ .name = "osc-selection-set",
+	  .type = OPTIONS_TABLE_FLAG,
+	  .scope = OPTIONS_TABLE_WINDOW,
+	  .default_num = 0
+	},
+
+	{ .name = "osc-set-clipboard",
+	  .type = OPTIONS_TABLE_FLAG,
+	  .scope = OPTIONS_TABLE_WINDOW,
+	  .default_num = 0
+	},
+
 	{ .name = "other-pane-height",
 	  .type = OPTIONS_TABLE_NUMBER,
 	  .scope = OPTIONS_TABLE_WINDOW,
@@ -712,12 +737,6 @@ const struct options_table_entry options_table[] = {
 	  .default_str = "default"
 	},
 
-	{ .name = "osc-selection-mode",
-	  .type = OPTIONS_TABLE_CHOICE,
-	  .scope = OPTIONS_TABLE_SERVER,
-	  .choices = options_osc_selection_mode_list,
-	  .default_num = 0
-	},
 
 	{ .name = "remain-on-exit",
 	  .type = OPTIONS_TABLE_FLAG,

@@ -1861,8 +1861,6 @@ const osc52_target_info_t osc52_target_info[OSC52_target_count] =
   } ;
 
 
-#define IS_CUT_BUFFER(tgt) ( OSC52_CUT_BUFFER0<=(tgt) && (tgt)<=OSC52_CUT_BUFFER7 ) ;
-
 /* Convert a target character used in OSC52 into an osc52_target_t enum value.
  * Return OSC52_UNKNOWN if character is unknown.
  * Remark: character 's' should be handled separately.
@@ -1967,29 +1965,47 @@ base64_decode(const char *src, size_t srclength, uint8_t *dest, size_t destlengt
 
 }
 
-/* OSC52 modes: 
+/* OSC52 modes are controled by the window option "osc-selection-mode" 
  * 
  *  - In 'manual' mode (the default), tmux attempts to mimic the 
  *    XTerm behaviour. The targets 'c', 'p', '0' , ..., '7' 
  *    are respectively associated to the named buffers "CLIPBOARD", 
  *    "PRIMARY", "CUT_BUFFER0", ... , "CUT_BUFFER7".  
  *    The target 's' write the selection to a new automatic buffer
- *    and reads it from the most recent buffer (this is the default 
- *    behaviour associated to the '[' and ']' key bindings).
+ *    and reads it from the most recent buffer. This is the behaviour 
+ *    associated by default to the '[' and ']' key bindings in tmux.
  * 
- *  - In 'auto' mode, the target list specified by OSC52 
- *    requests is ignored and "s" is used instead. 
+ *  - In 'select' mode, all OSC52 selections are processed using 
+ *    the target 's' (see manual mode).  
  *     
- *  - In 'clipboard' mode, the target list specified by OSC52 
- *    requests is ignored and "c" is used instead. 
+ *  - In 'clipboard' mode, all OSC52 selections will use the named 
+ *    buffer "CLIPBOARD". 
  *
  *  - In 'none' mode, setting the selection has no effects and 
  *    getting the selection will always return an empty string.
+ *    Though, the selection may still be copied to the terminal
+ *    clipboard (see osc-set-clipboard).
  * 
  *  - The 'scp' mode is similar to the 'manual' mode except that 
  *    the CUT_BUFFER targets are ignored. That can save  
  *    memory for applications using the recommanded target 
  *    list "s0".
+ * 
+ * The windows options "osc-selection-get" and "osc-selection-set" 
+ * can be used to individually enable or disable the abiility to get 
+ * or set the selection via OSC52. For security reasons, they are 
+ * both off by default. If osc-selection-get is off then 'get' requests 
+ * will still be honored by an empty reply to prevent dead-locking 
+ * the application.
+ *
+ * The windows option "osc-set-clipboard" controls whether OSC52 'set'
+ * requests from the client are transfered to the controling terminal. 
+ * This feature requires both set-clipboard and osc-selection-set 
+ * options to be on. This feature works in all OSC selection modes 
+ * including 'none', thus allowing to set the terminal clipboard without 
+ * affecting the tmux buffers. 
+ *
+ * 
  * 
  */
 
@@ -2000,7 +2016,7 @@ base64_decode(const char *src, size_t srclength, uint8_t *dest, size_t destlengt
  */
 enum {
    OSC52_MODE_MANUAL    = 0,
-   OSC52_MODE_AUTO      = 1,
+   OSC52_MODE_SELECT      = 1,
    OSC52_MODE_CLIPBOARD = 2,
    OSC52_MODE_NONE      = 3,
    OSC52_MODE_SCP       = 4
@@ -2028,8 +2044,8 @@ process_osc52(struct input_ctx *ictx, u_char *args)
   
   log_debug("%s", __func__);
 
-  mode = options_get_number(global_options, "osc-selection-mode");
-  
+  mode = options_get_number(ictx->wp->window->options, "osc-selection-mode");
+
   /* Find the second ';' in 'args' and split it to create p1 and p2 */
   sep = (u_char*) strchr( (char*)args,';') ;
   if (!sep) {        
@@ -2048,7 +2064,11 @@ process_osc52(struct input_ctx *ictx, u_char *args)
     struct paste_buffer * pb ; 
     const char * p1_save = p1 ; 
     const char * tail ;
-    
+
+    if (! options_get_number(ictx->wp->window->options, "osc-selection-get") ) {
+      mode = OSC52_MODE_NONE ; 
+    }
+
     switch(mode) {
     case OSC52_MODE_MANUAL:
     case OSC52_MODE_SCP:
@@ -2056,7 +2076,7 @@ process_osc52(struct input_ctx *ictx, u_char *args)
       if (*p1=='\0') 
         p1 = "s" ;
       break ;
-    case OSC52_MODE_AUTO:
+    case OSC52_MODE_SELECT:
       /* Ignore user target list and use an automatic buffer instead */
       p1 = "s" ;
       break ;
@@ -2071,8 +2091,8 @@ process_osc52(struct input_ctx *ictx, u_char *args)
       /* Should not happen */
       p1 = "s" ; 
     }
-    
-    
+
+
     /* The answer must use the same OSC termination sequence that the query. 
      * Two cases must be considered '\a' or '\e\\'.
      *
@@ -2147,17 +2167,24 @@ process_osc52(struct input_ctx *ictx, u_char *args)
     int            nt = 0 ;
     int            i ;
     size_t         size , size2 ;
-    char *         data ;
+    char *         data ;    
+    int            opt_osc_selection_set = options_get_number(ictx->wp->window->options, "osc-selection-set") ;
+    int            opt_osc_set_clipboard = options_get_number(ictx->wp->window->options, "osc-set-clipboard") ;
+    int            opt_set_clipboard     = options_get_number(global_options, "set-clipboard") ;
 
-    log_debug("%s: '%s' '%s'", __func__, p1, p2);
+      
+    if (! opt_osc_selection_set ) {
+      mode = OSC52_MODE_NONE ; 
+    }
 
     switch(mode) {
     case OSC52_MODE_MANUAL:
+    case OSC52_MODE_SCP:
       /* Use the provided list of target buffers or "s" if none */
       if (*p1=='\0') 
         p1 = "s" ;
       break ;
-    case OSC52_MODE_AUTO:
+    case OSC52_MODE_SELECT:
       /* Ignore user target list and use an automatic buffer instead */
       p1 = "s" ;
       break ;
@@ -2173,6 +2200,7 @@ process_osc52(struct input_ctx *ictx, u_char *args)
       /* Should not happen */
       p1 = "s" ; 
     }    
+
 
     /* Build an ordered list of targets without duplicates */
     for ( ; *p1 != '\0' ; p1++ )  {     
@@ -2191,33 +2219,31 @@ process_osc52(struct input_ctx *ictx, u_char *args)
       targets[nt++] = tgt ;
     }
 
+    /* Decode the base64 text */
+
     size = base64_decode_size(p2,strlen(p2)) ;
     data = xmalloc(size+1) ;
-
     size2 = base64_decode(p2, strlen(p2), data, size ) ;    
 
     if (size2!=size) {
-      /* Should never happen. base64_decode() should always match the size provided by base64_decode_size()  */
+      /* Should never happen. base64_decode() is expected to match the size provided by base64_decode_size()  */
       log_debug("%s: Unexpected errror during base64 decoding (%d != %d) \n", __func__ , (int)size, (int)size2);
       free(data) ;
     }
 
     data[size] = '\0' ;
 
-    /* If set-clipboard option is enabled then broadcast the provided selection to the terminal. 
-     * TODO: Do we want to do that systematically or only for some targets and if so, which ones?
-     *       For now, let's do it if either S, P or C is requested.
-     *       That could become configurable.
-     */
-    if ( options_get_number(global_options, "set-clipboard")) {
-      if ( present[OSC52_SELECT] || present[OSC52_CLIPBOARD] || present[OSC52_PRIMARY] ) {
-        struct screen_write_ctx ctx;
-        screen_write_start(&ctx, ictx->wp, NULL);
-        screen_write_setselection(&ctx, data, size);
-        screen_write_stop(&ctx);
+    /* Send to the terminal clipboard if all conditions are met */
+    if ( opt_osc_selection_set ) {
+      if ( opt_osc_set_clipboard ) {
+        if ( opt_set_clipboard ) {
+          struct screen_write_ctx ctx;
+          screen_write_start(&ctx, ictx->wp, NULL);
+          screen_write_setselection(&ctx, data, size);
+          screen_write_stop(&ctx);
+        }
       }
     }
-
 
     /* Process the list of targets in reverse order. 
      * The reason is that we may update multiple buffers and, at the end, we want the

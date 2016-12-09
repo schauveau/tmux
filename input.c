@@ -1996,7 +1996,6 @@ process_osc52(struct input_ctx *ictx, u_char *args)
   const u_char *p2 ;
   int mode ;
   int ignore_cut_buffers ;
-  int get_request ;  
   enum { GET_REQUEST , SET_REQUEST } request ;
   int allow_request ;
   

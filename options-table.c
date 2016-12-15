@@ -641,6 +641,13 @@ const struct options_table_entry options_table[] = {
 	  .default_num = 0
 	},
 
+	{ .name = "osc-primary-is-select",
+	  .type = OPTIONS_TABLE_FLAG,
+	  .scope = OPTIONS_TABLE_WINDOW,
+	  .choices = options_osc_selection_mode_list,
+	  .default_num = 0
+	},
+
 	{ .name = "osc-selection-targets",
 	  .type = OPTIONS_TABLE_STRING,
 	  .scope = OPTIONS_TABLE_WINDOW,

@@ -1994,6 +1994,7 @@ process_osc52(struct input_ctx *ictx, u_char *args)
   u_char *sep ;
   const u_char *p1 ;
   const u_char *p2 ;
+  const u_char *p1_save ; 
   int mode ;
   int ignore_cut_buffers ;
   enum { GET_REQUEST , SET_REQUEST } request ;
@@ -2012,6 +2013,8 @@ process_osc52(struct input_ctx *ictx, u_char *args)
   p1 = args  ;
   p2 = sep+1 ;
 
+  p1_save = p1 ;   /* Save the original list of targets. It may be required for a reply */
+    
   if ( strcmp(p2,"?")==0 ) {
     request = GET_REQUEST ;
     allow_request = options_get_number(ictx->wp->window->options, "osc-selection-get" ) ;
@@ -2048,7 +2051,6 @@ process_osc52(struct input_ctx *ictx, u_char *args)
 
     const char * bufname ;
     struct paste_buffer * pb ; 
-    const char * p1_save = p1 ; 
     const char * tail ;
 
     /* The answer must use the same OSC termination sequence that the query. 
@@ -2073,6 +2075,9 @@ process_osc52(struct input_ctx *ictx, u_char *args)
 
       if (tgt==OSC52_UNKNOWN) 
         continue ; 
+
+      if (tgt==OSC52_PRIMARY &&  options_get_number(ictx->wp->window->options, "osc-primary-is-select") )
+        tgt=OSC52_SELECT ; 
 
       if (osc52_target_info[tgt].is_cut_buffer && ignore_cut_buffers )
         continue ;     
@@ -2135,6 +2140,8 @@ process_osc52(struct input_ctx *ictx, u_char *args)
       osc52_target_t tgt = osc52_char_to_target(*p1) ;
       if (tgt==OSC52_UNKNOWN)
         continue ;
+      if (tgt==OSC52_PRIMARY &&  options_get_number(ictx->wp->window->options, "osc-primary-is-select") )
+        tgt=OSC52_SELECT ; 
       if (osc52_target_info[tgt].is_cut_buffer && ignore_cut_buffers )
         continue ;  
       /* Ignore duplicate targets */

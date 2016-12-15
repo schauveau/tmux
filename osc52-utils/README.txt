@@ -128,6 +128,12 @@ The following options are used to control the OSC52 behaviour:
     can save memory for applications explictly using the official 
     default OSC-52 target list "s0".
      
+  - osc-primary-is-select [ on | off ]
+
+    This changes the interpretation of the 'p' target.
+    Instead of using a buffer named PRIMARY, the 'p' target is now
+    interpreted as 's' (the current selection is in the most recent 
+    buffer).
 
 ====== EMACS =====
 

@@ -144,6 +144,42 @@
   (set-terminal-parameter nil 'xterm--get-selection "PATCHED" )
   )
 
+;;;
+;;; Calling this function will redefined the function xterm--selection-char
+;;; from term/xterm.el
+;;;
+;;; That redefinition shall occur in a tty hook called after term/xterm.el
+;;; is automatically loaded by emacs.
+;;;
+;;; The default version found in term/xterm.el knows PRIMARY=p and CLIPBOARD=c.
+;;;
+;;; This new implementation adds a few convenient targets for OSC-52
+;;; Those new targets won't be used by default but they can be accessed manually
+;;; via gui-get-selection and gui-set-selection.
+;;;
+;;; Changing the strings associated to 'PRIMARY and 'CLIPBOARD could also
+;;; make sense to change the yank/kill behavior when select-enable-primary
+;;; or select-enable-clipboard are set. That would only affect selection
+;;; via OSC-52. The behavior under X11 is not affected.
+;;;
+;;; When used undertmux
+;;;
+;;;
+(defun redefine-xterm--selection-char () 
+  "Redefined xterm--selection-char, the function used to select the OSC-52 target buffers"
+  (interactive)
+  (message "in redefine-xterm--selection-char")
+  (defun xterm--selection-char (type)
+    (pcase type
+      ('PRIMARY      "p")
+      ('CLIPBOARD    "c")
+      ('SELECT       "s")
+      ('SELECT_CLIPBOARD "sc")
+      ('CUT_BUFFER0  "0")
+      ('CUT_BUFFER1  "1")
+      (_ (error "Invalid selection type: %S" type))))
+  )  
+
 
 ;; A hook that will be called at the end of the terminal initialization 
 ;; This is the right place the enable features according to the terminal
@@ -156,10 +192,11 @@
            (message "  --> Xterm detected")
            (xterm--init-activate-set-selection)
            (xterm--init-activate-get-selection-PATCHED)
-           ;; For xterm, I like my selection to go in both the 
-           ;; the PRIMARY and CLIPBOARD
+           ;; For xterm, I like my selection to go in both PRIMARY and CLIPBOARD
            (setq select-enable-primary   t)
            (setq select-enable-clipboard t)
+           ;;
+           (redefine-xterm--selection-char)
            )
      ;; ===== Tmux ======
      ((eq term 'terminal-init-tmux) 
@@ -171,17 +208,23 @@
            (setq select-enable-clipboard nil)
            ;; Instead, use clipboard-yank and clipboard-kill-ring-save
            ;; to copy paste to tmux via OSC52.
-           (global-set-key [C-insert] 'clipboard-yank)
-           (global-set-key [C-delete] 'clipboard-kill-ring-save)
+           (global-set-key [M-insert] 'clipboard-yank)
+           (global-set-key [M-delete] 'clipboard-kill-ring-save)
+           ;;
+           (redefine-xterm--selection-char)
            )
-     
-          )))
+     )    
+    )
+  )
 
 
 (add-hook 'tty-setup-hook 'tty-osc52-hook)
 
 ;;;
-;;;  Reimplement a few clipboard management functions that are broken in emacs 25.1
+;;;  In emacs 25.0 or soon before that version, x-select-enable-clipboard was renamed to select-enable-clipboard. 
+;;;  Unfortunately, the renaming was done incorrectly in a few places (gui-select-enable-clipboard vs select-enable-clipboard).
+;;;  That breaks the clipboard-yank, clipboard-kill-ring-save and clipboard-kill-region functions
+;;;
 ;;;  due to an incorrect renaming of x-select-enable-clipboard.
 ;;;  https://debbugs.gnu.org/cgi/bugreport.cgi?bug=25145
 ;;;
@@ -206,4 +249,57 @@
   (message "clipboard-kill-region")  ;; for debug, to be removed! 
   (let ((select-enable-clipboard t))
     (kill-region beg end)))
+
+;;;
+;;; Below are new functions to manipulate the GUI selections in a more direct.
+;;; Unlike yank, clipboard-yank and similar functions those functions do not
+;;; try to be clever. between CLIPBOARD, PRIMARY or the kill-ring in a 'clever' way.
+;;;
+
+(defun paste-gui-clipboard ()
+  "Paste the value of the CLIPBOARD buffer at point"
+  (interactive)
+  (insert (gui-get-selection 'CLIPBOARD 'STRING))
+  )
+
+(defun paste-gui-primary ()
+  "Paste the value of the PRIMARY buffer at point"
+  (interactive)
+  (insert (gui-get-selection 'PRIMARY 'STRING))
+  )
+
+;; By default, SELECT is not a known gui selection target. 
+;; This function requires a patched version of xterm--selection-char
+;; that knows of the 'SELECT target (See above)
+(defun paste-gui-select ()
+  "Paste the value of the SELECT buffer at point"
+  (interactive)
+  (insert (gui-get-selection 'SELECT 'STRING))
+  )
+
+(defun copy-gui-clipboard (beg end)
+  "Copy the current region to the gui CLIPBOARD buffer "
+  (interactive "r")
+  (gui-set-selection 'CLIPBOARD (buffer-substring-no-properties beg end) )
+  )
+
+
+(defun copy-gui-primary (beg end)
+  "Copy the current region to the gui CLIPBOARD buffer "
+  (interactive "r")
+  (gui-set-selection 'PRIMARY (buffer-substring-no-properties beg end) )
+  )
+
+
+(defun copy-gui-select (beg end)
+  "Copy the current region to the gui SELECT buffer "
+  (interactive "r")
+  (gui-set-selection 'SELECT (buffer-substring-no-properties beg end) )
+  )
+
+(defun copy-gui-select-clipboard (beg end)
+  "Copy the current region to the gui SELECT and CLIPBOARD buffers"
+  (interactive "r")
+  (gui-set-selection 'SELECT_CLIPBOARD (buffer-substring-no-properties beg end) )
+  )
 

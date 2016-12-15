@@ -135,40 +135,49 @@ The following options are used to control the OSC52 behaviour:
     interpreted as 's' (the current selection is in the most recent 
     buffer).
 
-====== EMACS =====
+====== OSC-52 aware terminals =====
 
-emacs 25.1 is theoretically OSC52 aware but requires a bit of tuning: 
+An OSC-52 aware terminal is not stricly required to use most of the features 
+provided by that Tmux branch.
 
-   - By default, emacs 25.1 will identify tmux as screen and will 
-     attempt to OSC-52 sequences using screen DSC sequences. 
-     That does not work and that should not happen here.
+However, the ability to send the selection to the OS (see the osc-set-clipboard option)
+can be quite convenient.
 
-     Setting TERM to xterm or to any value the form xterm-* should 
-     solve that problem. 
+Here is a list of terminals applications that support OSC-52: 
 
-   - add something like that in your .emacs file:
+  - XTerm  
 
-        (defun my-xterm-hook ()
-          "Specific configuration when running inside xterm"
-          (interactive)
-          (when (string= emacs-version "25.1.1" )
-            (xterm--init-activate-set-selection)
-            ;;;(xterm--init-activate-get-selection)
-            (when (getenv "TMUX") 
-              (setq xterm-in-tmux t) )
-           )
-          )
-        
-        (add-hook 'terminal-init-xterm-hook  'my-xterm-hook)
+    Officiall supported since version >= 238 but it is probably best to use 
+    a more recent version.  I recently reported a bug in #327 and hopefully 
+    it will be fixed in the next release. 
 
-   - Getting the selection is still broken in emacs 25.1
-     because the OSC terminator \a in the reply is 
-     intepreted as CTRL-G, the keyboard shortcut used to 
-     interrupt commands. 
+    The feature must be enabled for instance with 
+       xterm -xrm '*.allowWindowOps: true' 
+     
+  - urxvt or rxvt-unicode 
 
-     The lisp/xterm.el file can be patched to use \e\\ instead of \a    
+    See https://github.com/parantapa/dotfiles/blob/master/urxvt-perl/52-osc
 
-     TODO: provide the patch.
+    Untested!
+
+  - ... 
+
+As far as I known, libvte does not support OSC-52 so most Gnome or GTK
+based terminal applications do not either.
+
+Konsole, the KDE terminal, does not support OSC-52 but there is an opened bug report
+https://bugs.kde.org/show_bug.cgi?id=372116
+
+
+
+====== EMACS 25.1 =====
+
+Emacs is theoretically OSC52 aware since version 25 but it requires a bit of tuning: 
+
+The provided file emacs25-tmux-osc52.el contains my current configuration for using OSC52 in emacs 25.1
+
+It probably won't work with any emacs version < 25.
+
 
 ====== Older EMACS using osc52e package  =====
 
